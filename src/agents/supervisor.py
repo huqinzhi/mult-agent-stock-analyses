@@ -499,14 +499,9 @@ def create_supervisor(
 
         # ── 3. 如果还有缺失结果，设置路由目标为 parallel ──────────────────
         if missing:
-            # 检查是否已触发过重分析，避免无限循环
-            reanalyze_triggered = getattr(state, "reanalyze_triggered", False)
-            if not reanalyze_triggered:
-                # 首次或非重分析情况：设置 routing_target="parallel" 触发全部分发
-                if getattr(state, "routing_target", None) != "parallel":
-                    state.routing_target = "parallel"
-            # 重分析情况：不设置 routing_target，让条件边进入情况3（只分发缺失的）
-            return state  # 返回（此时条件边会把任务分发给 Agent）
+            if getattr(state, "routing_target", None) != "parallel":
+                state.routing_target = "parallel"  # 设置路由目标，触发并行分发
+            return state  # 返回（此时条件边会把任务分发给 6 个 Agent）
 
         # ── 4. 结果已齐，清除路由目标，生成报告 ────────────────────────────
         state.routing_target = None

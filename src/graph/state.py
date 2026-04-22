@@ -318,12 +318,6 @@ class AgentState(BaseModel):
     # - "parallel": Supervisor 已设置，分发任务到 6 个 Agent
     # - None: 不设置路由，使用默认逻辑
 
-    # ── 重分析控制 ────────────────────────────────────────────────────────────
-
-    reanalyze_triggered: Annotated[bool, lambda a, b: b if b is not None else a] = False
-    # 是否已触发过重分析（避免无限循环）
-    # True = 已重分析过，不再重新派发，直接用已有结果生成报告
-
     # ── 执行追踪 ────────────────────────────────────────────────────────────
 
     completed_tasks: Annotated[List[str], lambda a, b: a + b if b else a] = Field(default_factory=list)
