@@ -209,9 +209,22 @@ def build_stock_analysis_graph(
             print(f"  [条件边] 所有结果已齐全，路由到 supervisor")
             return "supervisor"
 
-        # ── 情况3：默认 END ──────────────────────────────────────────────────
-        print(f"  [条件边] 默认路由到 END")
-        return END
+        # ── 情况3：有缺失结果（非首次）→ 只派发缺失的 Agent ─────────────────
+        # 重分析：只派发缺失的 Agent，仅重分析一次
+        # 检查是否已触发过重分析，避免无限循环
+        reanalyze_triggered = getattr(state, "reanalyze_triggered", False)
+        if reanalyze_triggered:
+            # 已重分析过一次，直接用已有结果生成报告
+            print(f"  [条件边] 已重分析过，直接用已有结果生成报告")
+            return "supervisor"
+
+        print(f"  [条件边] 有缺失结果且非首次，重分析派发缺失的 Agent: {missing_agents}")
+
+        # 创建新状态，设置 reanalyze_triggered=True
+        new_state = state.model_copy(deep=True)
+        new_state.reanalyze_triggered = True
+
+        return parallel_dispatch(new_state, missing_agents)  # 只分发缺失的 Agent
 
     # ─── 8. 添加条件边 ─────────────────────────────────────────────────────
     # add_conditional_edges(source, routing_fn, path_map)
