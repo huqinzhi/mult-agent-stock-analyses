@@ -48,7 +48,7 @@ from src.agents import (
     create_sentiment_analyst,  # 舆情监控师：情绪分析、分析师评级
     create_supervisor,        # 首席投资官：协调 + 报告生成
 )
-from src.graph.state import AgentState  # 工作流共享状态
+from src.graph.state import AgentState, IntentType  # 工作流共享状态
 from src import config                  # 全局配置（MINIMAX_MODEL, WEIGHT_MODE, AGENT_WEIGHTS）
 
 
@@ -145,23 +145,15 @@ def build_stock_analysis_graph(
         ]
 
     # ─── 7. 定义 Supervisor 条件边路由逻辑 ───────────────────────────────────
-    def supervisor_routing(state: AgentState):
+    def react_routing(state: AgentState):
         """
-        Supervisor 的条件边判断函数
+        ReAct 模式的路由逻辑
 
-        这个函数决定 Supervisor 执行完后下一步去哪
-
-        路由决策逻辑：
-            1. 已有 final_report → 直接 END（报告生成完毕）
-            2. 还有缺失结果 且 routing_target="parallel" → 并行分发任务
-            3. 没有缺失结果 → 让 Supervisor 再执行一次（生成报告）
-            4. 其他情况 → END
-
-        为什么需要条件边？
-        - 第一次 Supervisor 执行时，6 个 Agent 结果都没有
-        - 需要分发任务给 6 个 Agent
-        - 6 个 Agent 完成后，回到 Supervisor，此时所有结果都有了
-        - Supervisor 再执行一次，生成最终报告
+        决策流程：
+        1. 如果 done=True → END
+        2. 如果有 pending_tasks → 分发任务
+        3. 如果没有 pending_tasks 且没有 final_report → Supervisor 思考下一步
+        4. 如果没有 pending_tasks 且有 final_report → END
 
         Args:
             state: AgentState 当前状态
@@ -171,47 +163,41 @@ def build_stock_analysis_graph(
             [Send(...), ...] = 并行分发任务
             END = 结束工作流
         """
-        # ── 检查是否有最终报告 ───────────────────────────────────────────────
-        final_report = getattr(state, "final_report", None)
-        if final_report:
-            print(f"  [条件边] final_report 已存在，路由到 END")
+        # 检查是否完成
+        if getattr(state, "done", False):
             return END
 
-        # ── 检查是否还有缺失的 Agent 结果 ──────────────────────────────────
-        # 6 个 Agent 的结果字段名
-        required_results = [
-            "quantitative_result",   # 量化分析师
-            "chart_result",          # 图表分析师
-            "intelligence_result",   # 情报官
-            "risk_result",           # 风险评估师
-            "fundamental_result",    # 基本面分析师
-            "sentiment_result",      # 舆情监控师
-        ]
-        # any(getattr(state, r, None) is None for r in required_results)
-        # 如果任何一个结果为 None，has_missing = True
-        has_missing = any(getattr(state, r, None) is None for r in required_results)
+        if getattr(state, "final_report", None):
+            return END
 
-        # 获取当前路由目标
-        routing = getattr(state, "routing_target", None)
+        # 获取待执行任务
+        pending_tasks = getattr(state, "pending_tasks", [])
+        current_iteration = getattr(state, "current_iteration", 0)
+        max_iterations = getattr(state, "max_iterations", 10)
 
-        print(f"  [条件边] routing={routing}, has_missing={has_missing}, final_report={'有' if final_report else '无'}")
-
-        # ── 情况1：有缺失结果 且 routing_target="parallel" → 并行分发 ──────────
-        # 这是第一次 Supervisor 执行后的分支
-        # Supervisor 设置了 routing_target="parallel"，现在要分发任务
-        if has_missing and routing == "parallel":
-            print(f"  [条件边] 有缺失结果且 routing='parallel'，分发任务")
-            return parallel_dispatch(state)  # Send API 并行触发 6 个 Agent
-
-        # ── 情况2：没有缺失结果 → 让 Supervisor 再跑一次生成报告 ─────────────
-        # 所有 Agent 结果都齐了，Supervisor 需要汇总生成报告
-        if not has_missing:
-            print(f"  [条件边] 所有结果已齐全，路由到 supervisor")
+        # 检查迭代上限
+        if current_iteration >= max_iterations:
+            # 强制结束，生成报告
             return "supervisor"
 
-        # ── 情况3：默认 END ──────────────────────────────────────────────────
-        print(f"  [条件边] 默认路由到 END")
-        return END
+        # 如果有待执行任务，分发它们
+        if pending_tasks:
+            # 根据任务类型分发到对应的 Agent
+            return dispatch_tasks(state)
+
+        # 没有待执行任务，让 Supervisor 思考下一步
+        return "supervisor"
+
+    def dispatch_tasks(state: AgentState):
+        """根据任务列表分发任务"""
+        pending_tasks = getattr(state, "pending_tasks", [])
+        sends = []
+
+        for task in pending_tasks:
+            agent_type = task.get("agent_type") if isinstance(task, dict) else task.agent_type
+            sends.append(Send(agent_type, state))
+
+        return sends
 
     # ─── 8. 添加条件边 ─────────────────────────────────────────────────────
     # add_conditional_edges(source, routing_fn, path_map)
@@ -220,7 +206,7 @@ def build_stock_analysis_graph(
     # - path_map: 可能的返回值对应的节点名
     workflow.add_conditional_edges(
         "supervisor",
-        supervisor_routing,
+        react_routing,  # 改为 react_routing
         # Supervisor 可能返回以下路径：
         # - "supervisor" → 再跑一次 Supervisor（生成报告）
         # - END → 结束工作流
@@ -290,5 +276,45 @@ def build_stock_analysis_graph(
               └─────────────────┬──────────────────┘
                                 │
                                 ▼
-                              END
+END
 """
+
+# ── 意图到 Agent 的映射 ──────────────────────────────────────────
+
+INTENT_AGENT_MAPPING = {
+    IntentType.STOCK_ANALYSIS: {
+        "required": ["quantitative", "chart", "fundamental", "risk", "sentiment"],
+        "optional": ["intelligence", "news"],
+        "execution_mode": "parallel",
+    },
+    IntentType.STOCK_SCREENING: {
+        "required": ["screener", "comparer"],
+        "optional": ["fundamental", "risk"],
+        "execution_mode": "sequential",
+    },
+    IntentType.STOCK_COMPARISON: {
+        "required": ["comparer", "fundamental", "risk"],
+        "optional": ["chart", "sentiment"],
+        "execution_mode": "parallel_per_stock",
+    },
+    IntentType.INDUSTRY_ANALYSIS: {
+        "required": ["industry", "macro"],
+        "optional": ["fundamental", "risk"],
+        "execution_mode": "sequential",
+    },
+    IntentType.MACRO_ANALYSIS: {
+        "required": ["macro", "intelligence"],
+        "optional": [],
+        "execution_mode": "parallel",
+    },
+    IntentType.RISK_ASSESSMENT: {
+        "required": ["risk", "quantitative"],
+        "optional": ["fundamental", "sentiment"],
+        "execution_mode": "sequential",
+    },
+    IntentType.CONSULTATION: {
+        "required": ["supervisor"],
+        "optional": [],
+        "execution_mode": "sequential",
+    },
+}
