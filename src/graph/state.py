@@ -25,6 +25,8 @@ LangGraph 工作流共享状态定义模块
 # Optional: 允许值为 None（如 Optional[str] 等价于 str | None）
 # Any: 任意类型（不做类型检查）
 # Dict, List, Tuple: 集合类型注解
+from enum import Enum
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 # ─── 引入 Pydantic ────────────────────────────────────────────────────────────
@@ -39,6 +41,33 @@ from pydantic import BaseModel, Field
 from typing_extensions import Annotated  # 用于给类型添加注解（如降级）
 
 from langgraph.graph import add_messages  # 消息合并逻辑
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 意图类型枚举
+# ══════════════════════════════════════════════════════════════════════════════
+
+class IntentType(Enum):
+    """意图类型"""
+    STOCK_ANALYSIS = "stock_analysis"         # 股票分析
+    STOCK_SCREENING = "stock_screening"       # 股票筛选
+    STOCK_COMPARISON = "stock_comparison"     # 股票对比
+    INDUSTRY_ANALYSIS = "industry_analysis"   # 行业分析
+    MACRO_ANALYSIS = "macro_analysis"         # 宏观分析
+    RISK_ASSESSMENT = "risk_assessment"       # 风险评估
+    CONSULTATION = "consultation"             # 通用咨询
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 任务状态枚举
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TaskStatus(Enum):
+    """任务状态"""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -174,6 +203,43 @@ class AgentResult(BaseModel):
     # 原始数据（Agent -specific 数据，如技术指标值、止损位等）
     # 如 risk_agent 会返回 raw_data["stop_loss"] = {"volatility_stop_price": 9.5}
 
+    warning: Optional[str] = None               # 数据异常警告
+    missing_data: List[str] = Field(default_factory=list)  # 缺失数据列表
+    execution_time: float = 0.0                # 执行耗时
+    success: bool = True                       # 是否成功
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 任务单元模型
+# ══════════════════════════════════════════════════════════════════════════════
+
+class Task(BaseModel):
+    """
+    任务单元
+
+    描述一个可执行的任务，包含任务ID、类型、描述、状态等信息。
+    用于 ReAct 模式下的动态任务管理和执行追踪。
+
+    使用示例：
+        task = Task(
+            id="task_001",
+            agent_type="quantitative",
+            description="分析平安银行的技术指标",
+            priority=8
+        )
+    """
+    id: str                                    # 唯一标识
+    agent_type: str                            # Agent 类型
+    description: str                           # 任务描述
+    status: TaskStatus = TaskStatus.PENDING    # 任务状态
+    priority: int = 5                          # 优先级（1-10）
+    dependencies: List[str] = Field(default_factory=list)  # 依赖的任务ID
+    result: Optional[AgentResult] = None      # 分析结果
+    retry_count: int = 0                       # 重试次数
+    error_message: Optional[str] = None        # 错误信息
+    created_at: datetime = Field(default_factory=datetime.now)  # 创建时间
+    completed_at: Optional[datetime] = None    # 完成时间
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Agent 状态（LangGraph 共用状态）
@@ -272,6 +338,31 @@ class AgentState(BaseModel):
     prescreening_completed: Optional[bool] = None           # 初筛是否完成
     prescreening_reason: Optional[str] = None               # 初筛摘要
     prescreening_quality: Optional[DataQuality] = None     # 初筛数据质量
+
+    # ── ReAct 新增字段 ──────────────────────────────────────────────────────
+
+    # 意图识别
+    intent_type: Annotated[Optional[IntentType], lambda a, b: a if a is not None else b] = None
+    intent_details: Annotated[Dict[str, Any], lambda a, b: b if b is not None else a] = Field(default_factory=dict)
+
+    # 任务队列（动态）
+    pending_tasks: Annotated[List[Task], lambda a, b: b if b else a] = Field(default_factory=list)
+    running_tasks: Annotated[List[Task], lambda a, b: b if b else a] = Field(default_factory=list)
+    completed_tasks: Annotated[List[Task], lambda a, b: a + b if b else a] = Field(default_factory=list)
+    failed_tasks: Annotated[List[Task], lambda a, b: a + b if b else a] = Field(default_factory=list)
+
+    # 分析结果（动态字典，替代固定的 6 个字段）
+    agent_results: Annotated[Dict[str, AgentResult], lambda a, b: {**(a or {}), **(b or {})} if b else a] = Field(default_factory=dict)
+
+    # Supervisor ReAct 状态
+    supervisor_thought: Annotated[str, lambda a, b: b if b else a] = ""
+    supervisor_plan: Annotated[List[Dict[str, Any]], lambda a, b: b if b else a] = Field(default_factory=list)
+    supervisor_reflection: Annotated[str, lambda a, b: b if b else a] = ""
+
+    # 执行控制
+    max_iterations: int = 10
+    current_iteration: int = 0
+    done: bool = False
 
 
 # ══════════════════════════════════════════════════════════════════════════════

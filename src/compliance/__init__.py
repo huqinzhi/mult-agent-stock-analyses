@@ -3,25 +3,25 @@
 
 P0 风险控制核心模块
 
-提供：
-- DisclaimerFilter: 过滤投资建议词
-- MandatoryDisclaimer: 强制免责文本注入
-- DataSourceTracer: 数据溯源追踪
+V2 变更：
+- DisclaimerFilter 已放宽约束，不再过滤投资建议
+- MandatoryDisclaimer 简化免责文本
+- DataSourceTracer 保持不变
 
 使用方法：
     from src.compliance import (
         get_disclaimer_filter,
         MandatoryDisclaimer,
+        inject_disclaimer,
         DataSourceTracer,
     )
 
-    # 过滤投资建议
+    # 过滤（V2 不再做过滤）
     disclaimer_filter = get_disclaimer_filter()
     filtered = disclaimer_filter.filter(content)
 
     # 注入免责
-    injector = MandatoryDisclaimer()
-    report = injector.inject(analysis_content)
+    report = inject_disclaimer(analysis_content)
 
     # 追踪数据来源
     tracer = DataSourceTracer()
@@ -34,8 +34,9 @@ from .disclaimer_filter import (
 )
 from .mandatory_disclaimer import (
     MandatoryDisclaimer,
-    DISCLAIMER_TEXT,
+    MANDATORY_DISCLAIMER,
     get_default_injector,
+    inject_disclaimer,
 )
 from .data_source_tracer import (
     DataSourceTracer,
@@ -43,13 +44,14 @@ from .data_source_tracer import (
 )
 
 __all__ = [
-    # DisclaimerFilter
+    # DisclaimerFilter (V2 放宽版)
     "DisclaimerFilter",
     "get_disclaimer_filter",
-    # MandatoryDisclaimer
+    # MandatoryDisclaimer (V2 简化版)
     "MandatoryDisclaimer",
-    "DISCLAIMER_TEXT",
+    "MANDATORY_DISCLAIMER",
     "get_default_injector",
+    "inject_disclaimer",
     # DataSourceTracer
     "DataSourceTracer",
     "DataSourceEntry",
